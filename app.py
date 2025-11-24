@@ -1,21 +1,13 @@
 import streamlit as st
 import requests
 import time
-import os
-from dotenv import load_dotenv
+import json
+import base64
+from streamlit_oauth import OAuth2Component
 
-# =========================================================
-# 1. إعدادات الاتصال (Configuration)
-# =========================================================
-
-# تحميل متغيرات البيئة (لقراءة المفتاح السري)
-load_dotenv("akin-yurt.env")
-
-# إعدادات الرابط والمفتاح
-# بما أننا نعمل محلياً، نستخدم localhost
-API_URL = "http://localhost:8000"
-API_KEY = os.getenv("API_SECRET_KEY", "akinyurt-secret-2025") # المفتاح الافتراضي في حال عدم وجود الملف
-
+# ==========================================
+# 1. إعدادات الصفحة (Page Config)
+# ==========================================
 st.set_page_config(
     page_title="Akın Yurt AI",
     page_icon="🦅",
@@ -23,240 +15,310 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# =========================================================
-# 2. تصميم احترافي (CSS styling like Gemini/ChatGPT)
-# =========================================================
-CUSTOM_CSS = """
+# ==========================================
+# 2. تحميل الأسرار والإعدادات (Secrets)
+# ==========================================
+# يحاول قراءة الإعدادات من secrets.toml
+try:
+    # إعدادات Google Auth
+    CLIENT_ID = st.secrets.get("GOOGLE_CLIENT_ID", "")
+    CLIENT_SECRET = st.secrets.get("GOOGLE_CLIENT_SECRET", "")
+    REDIRECT_URI = st.secrets.get("REDIRECT_URI", "http://localhost:8501/component/streamlit_oauth.authorize")
+    
+    # إعدادات الـ API الخلفي
+    API_URL = st.secrets.get("API_URL", "http://localhost:8000")
+    API_KEY = st.secrets.get("API_KEY", "akinyurt-secret-2025")
+except FileNotFoundError:
+    st.error("ملف secrets.toml مفقود! يرجى إنشاؤه داخل مجلد .streamlit")
+    st.stop()
+
+# روابط Google OAuth القياسية
+AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+TOKEN_URL = "https://oauth2.googleapis.com/token"
+REVOKE_URL = "https://oauth2.googleapis.com/revoke"
+
+# ==========================================
+# 3. CSS وتصميم الواجهة (Custom Styling)
+# ==========================================
+st.markdown("""
 <style>
-    /* استيراد خطوط عصرية */
+    /* استيراد الخطوط */
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&family=Inter:wght@400;600&display=swap');
 
-    /* الخلفية العامة */
+    /* الخلفية والنصوص */
     .stApp {
-        background-color: #131314; /* Gemini Dark Background */
-        color: #E3E3E3;
+        background-color: #0E1117;
+        color: #E0E0E0;
         font-family: 'Inter', 'Cairo', sans-serif;
     }
 
-    /* تحسين القائمة الجانبية */
+    /* القائمة الجانبية */
     section[data-testid="stSidebar"] {
-        background-color: #1E1F20;
-        border-right: 1px solid #333;
+        background-color: #161B22;
+        border-right: 1px solid #30363D;
+    }
+
+    /* تحسين مظهر الرسائل */
+    div[data-testid="stChatMessage"] {
+        background-color: transparent;
+        padding: 1.5rem;
+        border-radius: 12px;
+        margin-bottom: 10px;
+    }
+    
+    /* رسالة المستخدم */
+    div[data-testid="stChatMessage"][data-testid="user"] {
+        background-color: transparent;
+    }
+
+    /* رسالة البوت */
+    div[data-testid="stChatMessage"][data-testid="assistant"] {
+        background-color: #1F242D;
+        border: 1px solid #30363D;
     }
 
     /* حقل الإدخال */
     .stChatInput textarea {
-        background-color: #2D2E2F !important;
+        background-color: #21262D !important;
         color: white !important;
-        border: 1px solid #444 !important;
-        border-radius: 16px !important;
-        padding: 14px !important;
-        font-size: 16px;
+        border: 1px solid #30363D !important;
+        border-radius: 15px !important;
     }
     .stChatInput textarea:focus {
         border-color: #4A90E2 !important;
-        box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.2) !important;
+        box-shadow: 0 0 10px rgba(74, 144, 226, 0.1) !important;
     }
 
-    /* رسائل المحادثة */
-    div[data-testid="stChatMessage"] {
-        padding: 1.5rem 0 !important;
-        background-color: transparent !important;
-    }
-    
-    /* رسالة المساعد (Akın Yurt) */
-    div[data-testid="stChatMessage"]:nth-child(even) {
-        background-color: #1E1F20 !important;
-        border-radius: 12px;
-        padding: 20px !important;
-        margin-bottom: 15px;
-        border: 1px solid #333;
-    }
-
-    /* الأفاتار (الصور الرمزية) */
-    .stChatMessage .stAvatar {
-        background-color: #4A90E2;
-        color: white;
-    }
-
-    /* إخفاء عناصر Streamlit غير المرغوبة */
-    header {visibility: hidden;}
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    
-    /* عناوين */
-    h1, h2, h3 { color: #E3E3E3 !important; }
-    
-    /* زر الاتصال */
-    .status-indicator {
-        padding: 8px;
-        border-radius: 5px;
-        font-size: 12px;
-        font-weight: bold;
+    /* شاشة الدخول */
+    .login-container {
         text-align: center;
-        margin-bottom: 20px;
+        padding: 60px;
+        background: #161B22;
+        border-radius: 20px;
+        margin-top: 50px;
+        border: 1px solid #30363D;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5);
     }
-    .online { background-color: #1E3A2F; color: #4CAF50; border: 1px solid #4CAF50; }
-    .offline { background-color: #3A1E1E; color: #FF5252; border: 1px solid #FF5252; }
+    
+    /* الأزرار */
+    div.stButton > button {
+        background: linear-gradient(135deg, #238636, #2EA043);
+        color: white;
+        border: none;
+        font-weight: bold;
+        padding: 0.5rem 1rem;
+        border-radius: 8px;
+        transition: transform 0.1s;
+    }
+    div.stButton > button:hover {
+        transform: scale(1.02);
+    }
+
+    /* حالة النظام */
+    .status-indicator {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        margin-right: 8px;
+    }
+    .online { background-color: #238636; box-shadow: 0 0 5px #238636; }
+    .offline { background-color: #DA3633; box-shadow: 0 0 5px #DA3633; }
 
 </style>
-"""
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# =========================================================
-# 3. إدارة الجلسة (Session State)
-# =========================================================
+# ==========================================
+# 4. إدارة الجلسة (Session State)
+# ==========================================
+if "email" not in st.session_state:
+    st.session_state.email = None
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "username" not in st.session_state:
-    st.session_state.username = "Guest"
 
-# دالة للتحقق من اتصال السيرفر
-def check_server_status():
+# ==========================================
+# 5. شاشة تسجيل الدخول (Login Screen)
+# ==========================================
+def show_login_screen():
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown("""
+            <div class="login-container">
+                <h1 style="font-size: 3rem; background: linear-gradient(to right, #4A90E2, #9013FE); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+                    Akın Yurt
+                </h1>
+                <p style="font-size: 1.1rem; color: #A0A0A0;">Türkmen Gençlerinin Dijital Vizyonu</p>
+                <hr style="border-color: #30363D; margin: 30px 0;">
+                <p style="color: #888; font-size: 0.9rem;">Giriş yaparak devam edin</p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # التحقق من وجود مفاتيح جوجل
+        if not CLIENT_ID or not CLIENT_SECRET:
+            st.warning("⚠️ Google Keys Missing in secrets.toml")
+            # زر تجاوز للدخول كضيف (للتطوير فقط)
+            if st.button("الدخول كضيف (Guest Login)", use_container_width=True):
+                st.session_state.email = "guest@akinyurt.com"
+                st.session_state.user_name = "Guest User"
+                st.rerun()
+        else:
+            # مكون المصادقة
+            oauth2 = OAuth2Component(CLIENT_ID, CLIENT_SECRET, AUTHORIZE_URL, TOKEN_URL, TOKEN_URL, REVOKE_URL)
+            result = oauth2.authorize_button(
+                name="Login with Google",
+                icon="https://www.google.com/favicon.ico",
+                redirect_uri=REDIRECT_URI,
+                scope="openid email profile",
+                key="google_auth",
+                use_container_width=True
+            )
+            
+            if result:
+                # فك تشفير التوكن
+                try:
+                    id_token = result["token"]["id_token"]
+                    payload = id_token.split('.')[1]
+                    payload += '=' * (-len(payload) % 4)
+                    decoded = json.loads(base64.b64decode(payload).decode('utf-8'))
+                    
+                    st.session_state.email = decoded.get("email")
+                    st.session_state.user_name = decoded.get("name", "User")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Login Error: {e}")
+
+# ==========================================
+# 6. واجهة الدردشة (Chat Interface)
+# ==========================================
+def check_server_health():
+    """فحص اتصال الخادم الخلفي"""
     try:
         requests.get(f"{API_URL}/", timeout=1)
         return True
     except:
         return False
 
-is_online = check_server_status()
+def show_chat_interface():
+    is_online = check_server_health()
 
-# =========================================================
-# 4. القائمة الجانبية (Sidebar)
-# =========================================================
-with st.sidebar:
-    st.title("🦅 Akın Yurt AI")
-    st.caption("Türkmen Gençlerinin Dijital Vizyonu")
-    
-    # حالة السيرفر
-    if is_online:
-        st.markdown('<div class="status-indicator online">🟢 System Online (Local)</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="status-indicator offline">🔴 System Offline</div>', unsafe_allow_html=True)
-        st.error("تأكد من تشغيل main.py")
+    # --- القائمة الجانبية ---
+    with st.sidebar:
+        st.title("🦅 Akın Yurt AI")
+        st.caption(f"User: {st.session_state.user_name}")
+        
+        # حالة النظام
+        if is_online:
+            st.markdown('<div style="padding:10px; background:#0d1117; border-radius:5px; border:1px solid #238636; color:#238636; font-weight:bold; text-align:center; margin-bottom:10px;"><span class="status-indicator online"></span> System Online</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div style="padding:10px; background:#0d1117; border-radius:5px; border:1px solid #DA3633; color:#DA3633; font-weight:bold; text-align:center; margin-bottom:10px;"><span class="status-indicator offline"></span> System Offline</div>', unsafe_allow_html=True)
+            st.error("Backend API Unreachable")
 
-    st.markdown("---")
-    
-    # إعدادات المستخدم
-    st.session_state.username = st.text_input("اسم المستخدم", value=st.session_state.username)
-    language = st.selectbox("اللغة / Dil", ["AR", "TR", "EN"])
-    
-    st.markdown("### ⚙️ التحكم")
-    if st.button("🗑️ مسح المحادثة", use_container_width=True):
-        st.session_state.messages = []
-        st.rerun()
+        st.markdown("---")
+        language = st.selectbox("Language / Dil", ["TR", "AR", "EN"])
+        
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("🗑️ Clear"):
+                st.session_state.messages = []
+                st.rerun()
+        with col_btn2:
+            if st.button("🚪 Logout"):
+                st.session_state.email = None
+                st.rerun()
 
-    st.markdown("---")
-    st.caption(f"Backend: {API_URL}")
-    st.caption("Engine: DeepSeek-1.3B (Ollama)")
-
-# =========================================================
-# 5. واجهة الدردشة (Main Chat UI)
-# =========================================================
-
-# شاشة الترحيب
-if not st.session_state.messages:
-    col1, col2, col3 = st.columns([1, 6, 1])
-    with col2:
-        st.markdown("""
-        <div style="text-align: center; margin-top: 80px; margin-bottom: 40px;">
-            <h1 style="font-size: 3.5rem; background: -webkit-linear-gradient(45deg, #4A90E2, #9013FE); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Akın Yurt</h1>
-            <p style="font-size: 1.2rem; color: #888;">نظام ذكاء اصطناعي محلي آمن ومستقل.</p>
+    # --- منطقة الدردشة ---
+    if not st.session_state.messages:
+        st.markdown(f"""
+        <div style="text-align: center; margin-top: 50px;">
+            <h2 style="color: #E0E0E0;">Merhaba, {st.session_state.user_name}! 👋</h2>
+            <p style="color: #888;">Akın Yurt size nasıl yardımcı olabilir?</p>
         </div>
         """, unsafe_allow_html=True)
         
-        # اقتراحات
-        suggestions = ["من أنت؟", "حدثني عن كركوك", "Nejdet Koçak kimdir?", "لخص لي الملفات"]
-        cols = st.columns(2)
+        # اقتراحات سريعة
+        suggestions = ["Kimsin?", "Kerkük Kalesi tarihi", "Proje hakkında bilgi ver"]
+        cols = st.columns(3)
         for i, sugg in enumerate(suggestions):
-            if cols[i % 2].button(sugg, key=f"sugg_{i}", use_container_width=True):
+            if cols[i].button(sugg, use_container_width=True):
                 st.session_state.messages.append({"role": "user", "content": sugg})
                 st.rerun()
 
-# دالة الكتابة المتدفقة
-def stream_text(text):
-    for word in text.split(" "):
-        yield word + " "
-        time.sleep(0.03)
+    # عرض الرسائل
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"], avatar="🦅" if message["role"] == "assistant" else "👤"):
+            st.markdown(message["content"])
+            if "source" in message:
+                st.caption(f"📚 {message['source']}")
 
-# عرض الرسائل السابقة
-for message in st.session_state.messages:
-    with st.chat_message(message["role"], avatar="👤" if message["role"] == "user" else "🦅"):
-        st.markdown(message["content"])
-        if "source" in message and message["source"] != "Akın Yurt AI":
-            st.caption(f"📚 المصدر: {message['source']}")
-
-# =========================================================
-# 6. معالجة الإدخال والاتصال بالـ API
-# =========================================================
-if prompt := st.chat_input("أرسل رسالة..."):
-    
-    if not is_online:
-        st.error("⚠️ لا يمكن الإرسال. السيرفر المحلي (main.py) لا يعمل!")
-    else:
-        # عرض رسالة المستخدم
+    # الإدخال والمعالجة
+    if prompt := st.chat_input("Mesajınızı yazın..."):
+        # 1. إضافة رسالة المستخدم
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user", avatar="👤"):
             st.markdown(prompt)
 
-        # الرد من السيرفر
+        # 2. الرد
         with st.chat_message("assistant", avatar="🦅"):
-            response_placeholder = st.empty()
+            response_container = st.empty()
             
-            # حالة التفكير
-            with st.status("جاري المعالجة...", expanded=True) as status:
-                try:
-                    status.write("🔐 التحقق من المفاتيح الأمنية...")
-                    status.write("🧠 الاتصال بالمحرك العصبي (Local Engine)...")
-                    
-                    # تجهيز الطلب
-                    payload = {
-                        "query": prompt,
-                        "language": language,
-                        "username": st.session_state.username
-                    }
-                    
-                    # إرسال المفتاح في Header
-                    headers = {
-                        "x-api-key": API_KEY,
-                        "Content-Type": "application/json"
-                    }
-                    
-                    # الاتصال الفعلي
-                    start_time = time.time()
-                    response = requests.post(
-                        f"{API_URL}/chat", 
-                        json=payload, 
-                        headers=headers,
-                        timeout=120
-                    )
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        answer = data.get("answer", "")
-                        source = data.get("source", "Unknown")
+            with st.status("Thinking...", expanded=True) as status:
+                if not is_online:
+                    status.update(label="Connection Failed", state="error")
+                    st.error("Cannot connect to Akın Yurt Server. Please check main.py or Ngrok.")
+                else:
+                    try:
+                        # إعداد الطلب
+                        payload = {
+                            "query": prompt,
+                            "username": st.session_state.email,
+                            "language": language
+                        }
+                        headers = {
+                            "x-api-key": API_KEY,
+                            "Content-Type": "application/json"
+                        }
                         
-                        status.update(label=f"تم (الزمن: {round(time.time() - start_time, 2)}ث)", state="complete", expanded=False)
+                        # الاتصال بالـ API
+                        response = requests.post(
+                            f"{API_URL}/api/v1/chat",
+                            json=payload,
+                            headers=headers,
+                            timeout=60
+                        )
                         
-                        # عرض النص
-                        response_placeholder.write_stream(stream_text(answer))
+                        if response.status_code == 200:
+                            data = response.json()
+                            answer = data["answer"]
+                            source = data["source"]
+                            
+                            status.update(label="Complete", state="complete", expanded=False)
+                            
+                            # تأثير الكتابة
+                            full_text = ""
+                            for chunk in answer.split():
+                                full_text += chunk + " "
+                                time.sleep(0.02)
+                                response_container.markdown(full_text + "▌")
+                            response_container.markdown(full_text)
+                            
+                            if "Knowledge Base" in source:
+                                st.info(f"Source: {source}")
+                            
+                            st.session_state.messages.append({"role": "assistant", "content": answer, "source": source})
                         
-                        # عرض المصدر
-                        if source and "Knowledge Base" in source:
-                            st.info(f"مستند إلى: {source}")
-                        elif source and "Cloud Memory" in source:
-                            st.success(f"من الذاكرة: {source}")
-                        
-                        # الحفظ
-                        st.session_state.messages.append({"role": "assistant", "content": answer, "source": source})
-                        
-                    elif response.status_code == 403:
-                        status.update(label="فشل التحقق", state="error")
-                        st.error("⛔ مفتاح API غير صحيح! تأكد من ملف akin-yurt.env")
-                    else:
-                        status.update(label="خطأ", state="error")
-                        st.error(f"خطأ في السيرفر: {response.text}")
-                        
-                except Exception as e:
-                    status.update(label="فشل الاتصال", state="error")
-                    st.error(f"حدث خطأ غير متوقع: {str(e)}")
+                        else:
+                            status.update(label="Server Error", state="error")
+                            st.error(f"Error {response.status_code}: {response.text}")
+                            
+                    except Exception as e:
+                        status.update(label="Error", state="error")
+                        st.error(f"Connection Error: {e}")
+
+# ==========================================
+# 7. التشغيل الرئيسي (Main Loop)
+# ==========================================
+if __name__ == "__main__":
+    if st.session_state.email:
+        show_chat_interface()
+    else:
+        show_login_screen()
